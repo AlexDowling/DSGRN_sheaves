@@ -6,7 +6,7 @@ import DSGRN_utils
 import pychomp
 
 from DSGRN_sheaves.Cohomology import *
-from DSGRN_sheaves.Sheaves import *
+from DSGRN_sheaves.Sheaf import *
 from DSGRN_sheaves.Continuation import *
 from DSGRN_sheaves.SearchBifurcations import *
 from DSGRN_sheaves.PlotAttractorSheaf import *
