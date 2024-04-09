@@ -6,8 +6,8 @@ import DSGRN_utils
 import pychomp
 import math
 
-from Sheaf import *
-from Continuation import *
+from DSGRN_sheaves.Sheaf import *
+from DSGRN_sheaves.Continuation import *
 
 import matplotlib
 import matplotlib.pyplot as plt
