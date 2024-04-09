@@ -6,8 +6,8 @@ import DSGRN_utils
 import pychomp
 import itertools
 
-from Sheaf import *
-from Cohomology import *
+from DSGRN_sheaves.Sheaf import *
+from DSGRN_sheaves.Cohomology import *
 
 def stg_union(stg_list, level = 8):
     """ Inputs a list of RookRulesCubicalComplex objects with the same 
