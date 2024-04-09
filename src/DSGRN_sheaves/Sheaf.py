@@ -4,7 +4,8 @@
 import galois
 import numpy as np
 import pychomp
-from Cohomology import *
+
+from DSGRN_sheaves.Cohomology import *
 
 class Sheaf:
     """ Class for storing the stalks and restriction maps of a sheaf. Currently 
