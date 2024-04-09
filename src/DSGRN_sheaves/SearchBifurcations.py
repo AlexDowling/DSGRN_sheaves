@@ -11,9 +11,9 @@ import math
 import time
 import sys
 
-from Sheaf import *
-from Cohomology import *
-from Continuation import *
+from DSGRN_sheaves.Sheaf import *
+from DSGRN_sheaves.Cohomology import *
+from DSGRN_sheaves.Continuation import *
 
 def greatest_constraint_first(G, grading):
     """ Greedy algorithm which returns an ordering on the vertices of a given 
