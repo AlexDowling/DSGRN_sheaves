@@ -226,9 +226,9 @@ class BifurcationQuery:
                     break
             # Get settings from criteria
             selection = criteria.get('selection', 
-                                     [v[0] for v in self.match_graph.vertices])
+                                     [v for v in self.match_graph.vertices])
             indices = [match[i] for i in range(len(match)) 
-                                    if self.ordering[i][0] in selection]
+                                    if self.ordering[i] in selection]
             predicate = criteria.get('predicate', lambda sc : True)
             dim = criteria.get('dim', self.parameter_graph.dimension())
             length_cap = criteria.get('length_cap', 2)
