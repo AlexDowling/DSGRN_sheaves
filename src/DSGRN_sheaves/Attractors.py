@@ -56,8 +56,9 @@ def attractor_sections(shf, morse_dict, shf_cohomology=None):
         for cell in shf.grading[0]:
             selected = morse_nodes[cell]
             P = pychomp.Poset(morse_dict[cell])
-            if set(morse_nodes[cell]) != set(morse_nodes[cell]).union(*[set(P.descendants(m)) 
-                                                      for m in morse_nodes[cell]]):
+            if set(morse_nodes[cell]) != set(morse_nodes[cell]).union(
+                                       *[set(P.descendants(m)) 
+                                         for m in morse_nodes[cell]]):
                 break
         else:
             att_secs.add_vertex(tuple([int(s==1) for s in section]))
