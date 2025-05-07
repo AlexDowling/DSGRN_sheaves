@@ -20,14 +20,14 @@ def blank_stg(parameter_graph):
     # FIX THIS: the initialization of stg builds the trivial multivalued map 
     # instead of the empty one
     parameter = parameter_graph.parameter(0)
-    stg = DSGRN_utils.CubicalBlowupGraph(parameter, level=0)
+    stg = DSGRN_utils.CubicalBlowupGraph(parameter=parameter, level=0)
     
     stg.digraph.graph_vertices = set(stg.blowup_complex(stg.dim))
     stg.digraph.adjacency_lists = {cell : set() 
                                    for cell in stg.blowup_complex(stg.dim)}
     return stg
 
-def stg_union(stg_list):
+def stg_union(stg_list, parameter_graph):
     """ Inputs a list of CubicalBlowupGraph objects with the same 
         sets of vertices. 
         
@@ -35,7 +35,7 @@ def stg_union(stg_list):
         the union of those from the complexes of given list.
     """
 
-    total_stg = blank_stg(DSGRN.ParameterGraph(stg_list[0].network))
+    total_stg = blank_stg(parameter_graph)
     # For each vertex
     for v in total_stg.digraph.vertices():
         # get the adjacencies from ALL of the complexes
@@ -72,7 +72,7 @@ def build_parameter_complex(parameter_graph, parameter_indices = None,
         top_cells.update({index : cell})
         parameter_complex.add_vertex(cell)
         stg_dict.update({cell : DSGRN_utils.CubicalBlowupGraph(
-                                parameter, level)})
+                                parameter=parameter, level=level)})
 
     # Build the remaining cells from the top down (BFS ordering)
     for codim, index in product(range(1, dim+1), parameter_indices):
@@ -109,7 +109,7 @@ def build_parameter_complex(parameter_graph, parameter_indices = None,
             if cell in stg_dict:
                 cell_stgs.append(stg_dict[cell])
             # and build a new CubicalBlowupGraph from their union
-            stg_dict.update({cell : stg_union(cell_stgs)})
+            stg_dict.update({cell : stg_union(cell_stgs, parameter_graph)})
 
             # Find all children of the cell
             child_cells = set(cell_join.get_child_cells())
