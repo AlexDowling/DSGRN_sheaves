@@ -232,8 +232,8 @@ class BifurcationQuery:
             predicate = criteria.get('predicate', lambda sc : True)
             dim = criteria.get('dim', self.parameter_graph.dimension())
             length_cap = criteria.get('length_cap', 2)
-            prune_grad = criteria.get('prune_grad', 'none')
-            clean = criteria.get('clean_stalks', False)
+            prune_grad = criteria.get('prune_grad', 'some')
+            clean = criteria.get('clean_stalks', True)
             
             # Compute cohomology of parameter complex from configuration of 
             # settings
