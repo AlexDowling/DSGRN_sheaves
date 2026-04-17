@@ -150,46 +150,70 @@ class GeneralHysteresisQuery(BifurcationQuery):
 
     def check_section(self, section, att_secs, c_att_secs, 
                             R_tc, R_lc, R_rc, K_l, K_r):
+        # TODO: make this match with Definition 4.3
+        # make sure the global section has a unique immediate predecessor
         if len(att_secs.children(section)) != 1:
             return False
+        # that section should be the zero section
         zero = list(att_secs.children(section))[0]
         if any(a!=0 for a in zero):
             return False
+        # restrict the global section to the center
+        # really that's happening in the `np.matmul` call, some formatting
+        # is happening with `tuple`
         c_section = tuple([int(s==1) 
                            for s in np.matmul(R_tc, galois.GF2(section))])
+        # this section should have a unique immediate predecessor
         if len(c_att_secs.children(c_section)) != 1:
             return False
+        # that predecessor should have two predecessors of its own
         pred = list(c_att_secs.children(c_section))[0]
         if len(c_att_secs.children(pred)) != 2:
             return False
 
+        # pick out each of the two predecessors from before
         s0 = galois.GF2([[a] for a in list(c_att_secs.children(pred))[0]])
         s1 = galois.GF2([[a] for a in list(c_att_secs.children(pred))[1]])     
+        # determine the image of the sections from the left side into the center
         M_lc = np.matmul(R_lc, K_l)
+        # determine the image of the sections from the right side into the center
         M_rc = np.matmul(R_rc, K_r)
-           
+
+        # don't know yet whether or not `s0` or `s1` is on the left or right!
+        # `hyz01`: `s0` is on the left, `s1` is on the right
+        # `s0` is inaccessible from the right, `s1` is inaccessible from the left
         hys01 = (self.in_img(M_lc, s0) and self.in_img(M_rc, s1) 
                  and not self.in_img(M_lc, s1) and not self.in_img(M_rc, s0))
+        # `hyz02`: `s1` is on the left, `s0` is on the right
+        # `s1` is inaccessible from the right, `s0` is inaccessible from the left
         hys10 = (self.in_img(M_lc, s1) and self.in_img(M_rc, s0) 
                  and not self.in_img(M_lc, s0) and not self.in_img(M_rc, s1))
         return hys01 or hys10
     
     def general_hysteresis(self, pg, match, ordering):
-        l_match = match[:-1]
-        r_match = match[:-2] + [match[-1]]
-        c_match = match[:-2]
+        # general_hysteresis
+        #    pg: Parameter graph
+        #    match: a particular path in parameter graph
 
+        #    match is [*at least bistable nodes*, *at least monostable*, *at least monostable node*]
+        c_match = match[:-2] # first n-2 are all at least bistable
+        l_match = match[:-1] # also include the first "monostable" in `match`
+        r_match = match[:-2] + [match[-1]]  # also include the last "monostable" in `match`
+        
         l_edge_cell = top_cech_cell(self.parameter_graph, match[-2], 1)
         r_edge_cell = top_cech_cell(self.parameter_graph, match[-1], 1)
 
+        # build the sheaf on the whole path
         sheaf_data = self.build_sheaf_data(match)
         pc, stg_dict, shf, shf_cohomology, rank = sheaf_data
         morse_dict = build_morse_dict(pc, stg_dict)
+        # get sections of attractor sheaf which correspond to attractors at each cell
         att_secs = attractor_sections(shf, morse_dict)
 
         c_sheaf_data = self.build_sheaf_data(c_match)
         c_pc, c_stg_dict, c_shf, c_shf_cohomology, c_rank = c_sheaf_data
         c_morse_dict = build_morse_dict(c_pc, c_stg_dict)
+        # get sections of attractor sheaf which correspond to attractors at each cell
         c_att_secs = attractor_sections(c_shf, c_morse_dict)
 
         l_sheaf_data = self.build_sheaf_data(l_match)
@@ -208,7 +232,8 @@ class GeneralHysteresisQuery(BifurcationQuery):
                                            row_slices, l_edge_cell)
         R_rc = self.build_right_restriction(r_sheaf_data, c_sheaf_data,
                                             row_slices, r_edge_cell)
-        
+
+        # check each global section to see if there is hysteresis inside it
         return any(self.check_section(section, att_secs, c_att_secs, R_tc, 
                                       R_lc, R_rc, K_l, K_r) 
                                       for section in att_secs)
