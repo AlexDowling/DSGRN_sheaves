@@ -2,7 +2,10 @@ import DSGRN
 import DSGRN_utils
 import numpy as np
 import galois
+import pychomp
 from numpy.linalg import matrix_rank
+from dataclasses import dataclass
+from typing import Any
 
 from ..Sheaf import *
 from ..Cohomology import *
@@ -11,298 +14,371 @@ from ..Attractors import *
 from .BifurcationQuery import *
 from ..CechCell import *
 
+
+# Let $`P = \{\zeta_i\}_{i=1}^k`$ be a path in the parameter graph
+# $`\mathsf{PG}(RN)`$. The path is said to contain an *algebraic
+# switch bifurcation* if there exists a global section
+# $`s = \{s_\eta\}_{\eta\in \mathcal{Z}_P} \in
+# \Gamma(\mathcal{Z}_P;\mathcal{S}^\mathsf{Att})`$ and two sections
+# $`a \in \Gamma(\mathcal{Z}_P^\textnormal{left}; \mathcal{S}^\mathsf{Att})`$
+# and $`b \in \Gamma(\mathcal{Z}_P^\textnormal{right};
+# \mathcal{S}^\mathsf{Att})`$ satisfying:
+#
+# 1. **(minimality)** The global section $`s`$ has a unique immediate
+#    predecessor in $`\Gamma(\mathcal{Z}_P; \mathcal{S}^\mathsf{Att})`$
+#    which assigns to each cell $`\eta`$ the empty set. Likewise, the
+#    sections $`a, b`$ have unique immediate predecessors in
+#    $`\Gamma(\mathcal{Z}_P^\textnormal{left}; \mathcal{S}^\mathsf{Att})`$
+#    and $`\Gamma(\mathcal{Z}_P^\textnormal{right}; \mathcal{S}^\mathsf{Att})`$
+#    respectively, where each assigns the empty set at every cell it
+#    is defined.
+# 2. **(ordering)** $`a < s|_{\mathcal{Z}_P^\textnormal{left}}`$ and
+#    likewise $`b < s|_{\mathcal{Z}_P^\textnormal{right}}`$.
+# 3. **(folding)** $`a|_{\mathcal{Z}_P^\textnormal{center}} \vee
+#    b|_{\mathcal{Z}_P^\textnormal{center}}`$ is the unique immediate
+#    predecessor of $`s|_{\mathcal{Z}_P^\textnormal{center}}`$ in
+#    $`\Gamma(\mathcal{Z}_P^\textnormal{center}; \mathcal{S}^\mathsf{Att})`$.
+
+@dataclass
+class HysteresisSheafData:
+    #   the Cech poset built over the path's parameter indices
+    parameter_complex: Any
+    #   per-cell DSGRN state transition graphs, keyed by Cech cell
+    state_transition_graphs: dict
+    #   attractor sheaf built over the parameter complex
+    sheaf: Sheaf
+    #   cohomology of the attractor sheaf, one list of generators per degree
+    sheaf_cohomology: list
+    #   total dimension of the sheaf, summed over all stalks
+    rank: int
+    #   Morse graph for each cell's state transition graph
+    morse_dict: dict
+    #   poset of attractor sections of the sheaf
+    attractor_sections: pychomp.Poset
+
 class GeneralHysteresisQuery(BifurcationQuery):
 
     def build_grading(self, param_stability):
+        #   build the parameter grading used to match paths: grade -1
+        #   accepts any node, grade 1 requires multiple stable states.
+        #   `param_stability` is an optional precomputed StabilityQuery
+
+        #   fall back to computing stability directly if not supplied
         if param_stability is None:
             param_stability = DSGRN_utils.StabilityQuery(
-                                          self.parameter_graph.network())
+                self.parameter_graph.network()
+            )
         num_indices = self.parameter_graph.size()
+        #   grade -1 matches any parameter node
         self.param_grading = {-1 : [i for i in range(num_indices)]}
+        #   grade 1 matches only parameter nodes with multiple stable states
         self.param_grading.update({1 : []})
         for key in param_stability.keys():
+            #   `key` counts stable equilibria; keep the multistable ones
             if key > 1:
-                self.param_grading[1] = (self.param_grading[1] 
-                                         + list(param_stability[key]))
+                self.param_grading[1] = (
+                    self.param_grading[1] + list(param_stability[key])
+                )
 
     def build_sheaf_data(self, indices):
-        pc, stg_dict = build_parameter_complex(self.parameter_graph, 
-                                               indices, 1)
+        #   build the attractor sheaf (and everything derived from it)
+        #   over the sub-path given by `indices`, a list of parameter
+        #   node indices
+
+        #   build the parameter complex and its state transition graphs
+        #   over the given path indices
+        parameter_complex, state_transition_graphs = build_parameter_complex(
+            self.parameter_graph, indices, 1
+        )
         if len(indices) < 2:
+            #   a single-vertex path has no edge to hang a sheaf on, so
+            #   graft on a dummy 0-cell pointing at its own top cell
             top_cell = top_cech_cell(self.parameter_graph, indices[0], 1)
-            pc.add_edge(self.dummy, top_cell)
-            stg_dict.update({self.dummy : stg_dict[top_cell]})
-        shf = attractor_sheaf(pc, stg_dict)
-        shf_cohomology = sheaf_cohomology(shf)
-        rank = sum([len(shf.stalk(key)) for key in shf.grading[0]])
-        return pc, stg_dict, shf, shf_cohomology, rank
+            parameter_complex.add_edge(self.dummy, top_cell)
+            state_transition_graphs.update(
+                {self.dummy : state_transition_graphs[top_cell]}
+            )
+        #   build the attractor sheaf over the complex and compute its
+        #   cohomology, which is what witnesses a hysteresis loop
+        sheaf = attractor_sheaf(
+            parameter_complex, state_transition_graphs, 'some'
+        )
+        cohomology = sheaf_cohomology(sheaf)
+        #   total dimension of the sheaf, summed over every cell's stalk
+        rank = sum([len(sheaf.stalk(key)) for key in sheaf.grading[0]])
+        #   the Morse graph and attractor-section poset are what
+        #   `general_hysteresis` walks to look for candidate folds
+        morse_dict = build_morse_dict(
+            parameter_complex, state_transition_graphs
+        )
+        attractor_secs = attractor_sections(sheaf, morse_dict)
+        return HysteresisSheafData(
+            parameter_complex, state_transition_graphs, sheaf,
+            cohomology, rank, morse_dict, attractor_secs
+        )
 
-    def build_slices(self, shf):
-        row_slices = {}
-        row = 0
-        for cell in shf.grading[0]:
-            row_slices.update({cell : slice(row, row+len(shf.stalk(cell)))})
-            row = row + len(shf.stalk(cell))
-        return row_slices
-
-    def build_total_restriction(self, sheaf_data, c_sheaf_data, row_slices, 
-                                l_edge_cell, r_edge_cell):
-        pc, stg_dict, shf, shf_cohomology, rank = sheaf_data
-        c_pc, c_stg_dict, c_shf, c_shf_cohomology, c_rank = c_sheaf_data
-        
-        R_tc = shf.GF([[0 for j in range(rank)] for i in range(c_rank)])
-            
-        col = 0
-        for cell in shf.grading[0]:
-            if len(shf.P.children(cell)) < 2:
-                pass            
-            elif l_edge_cell in shf.P.children(cell):
-                c_edge_cell = next(c for c in shf.P.children(cell) 
-                                   if c != l_edge_cell)
-                target_cell = CechCell(c_edge_cell.inequality_sets, 0, 
-                                       c_edge_cell.labels)
-                R = morse_restriction(shf.stalk(cell), 
-                                      c_shf.stalk(target_cell))
-                col_slice = slice(col, col+len(shf.stalk(cell)))
-                R_tc[row_slices[target_cell], col_slice] = R
-            elif r_edge_cell in shf.P.children(cell):
-                c_edge_cell = next(c for c in shf.P.children(cell) 
-                                   if c != r_edge_cell)
-                target_cell = CechCell(c_edge_cell.inequality_sets, 0, 
-                                       c_edge_cell.labels)
-                if self.length == 3:
-                    target_cell = self.dummy
-                R = morse_restriction(shf.stalk(cell), 
-                                      c_shf.stalk(target_cell))
-                col_slice = slice(col, col+len(shf.stalk(cell)))
-                R_tc[row_slices[target_cell], col_slice] = R
-            else:
-                target_cell = cell
-                R = shf.GF(np.eye(len(shf.stalk(cell))).astype(int))
-                col_slice = slice(col, col+len(shf.stalk(cell)))
-                R_tc[row_slices[target_cell], col_slice] = R
-            col = col + len(shf.stalk(cell))
-
-        return R_tc
-
-    def build_left_restriction(self, l_sheaf_data, c_sheaf_data, row_slices, 
-                               l_edge_cell):
-        l_pc, l_stg_dict, l_shf, l_shf_cohomology, l_rank = l_sheaf_data
-        c_pc, c_stg_dict, c_shf, c_shf_cohomology, c_rank = c_sheaf_data
-        
-        R_lc = l_shf.GF([[0 for j in range(l_rank)] for i in range(c_rank)])
-            
-        col = 0
-        for cell in l_shf.grading[0]:
-            if (l_edge_cell in l_shf.P.children(cell) 
-                and len(l_shf.P.children(cell)) > 1):
-                c_edge_cell = next(c for c in l_shf.P.children(cell) 
-                                   if c != l_edge_cell)
-                target_cell = CechCell(c_edge_cell.inequality_sets, 0, 
-                                       c_edge_cell.labels)
-                R = morse_restriction(l_shf.stalk(cell), 
-                                      c_shf.stalk(target_cell))
-                col_slice = slice(col, col+len(l_shf.stalk(cell)))
-                R_lc[row_slices[target_cell], col_slice] = R
-            elif l_edge_cell not in l_shf.P.children(cell):
-                target_cell = cell
-                if self.length == 3:
-                    target_cell = self.dummy
-                R = morse_restriction(l_shf.stalk(cell), 
-                                      c_shf.stalk(target_cell))
-                col_slice = slice(col, col+len(l_shf.stalk(cell)))
-                R_lc[row_slices[target_cell], col_slice] = R
-            col = col + len(l_shf.stalk(cell))
-
-        return R_lc
-
-    def build_right_restriction(self, r_sheaf_data, c_sheaf_data, row_slices, 
-                                r_edge_cell):
-        r_pc, r_stg_dict, r_shf, r_shf_cohomology, r_rank = r_sheaf_data
-        c_pc, c_stg_dict, c_shf, c_shf_cohomology, c_rank = c_sheaf_data
-        
-        R_rc = r_shf.GF([[0 for j in range(r_rank)] for i in range(c_rank)])
-        col = 0
-        for cell in r_shf.grading[0]:
-            if (r_edge_cell in r_shf.P.children(cell) 
-                and len(r_shf.P.children(cell))) > 1:
-                c_edge_cell = next(c for c in r_shf.P.children(cell) 
-                                   if c != r_edge_cell)
-                target_cell = CechCell(c_edge_cell.inequality_sets, 0, 
-                                       c_edge_cell.labels)
-                if self.length == 3:
-                    target_cell = self.dummy
-                R = morse_restriction(r_shf.stalk(cell), 
-                                      c_shf.stalk(target_cell))
-                col_slice = slice(col, col+len(r_shf.stalk(cell)))
-                R_rc[row_slices[target_cell], col_slice] = R
-            elif r_edge_cell not in r_shf.P.children(cell):
-                target_cell = cell
-                R = r_shf.GF(np.eye(len(r_shf.stalk(cell))).astype(int))
-                col_slice = slice(col, col+len(r_shf.stalk(cell)))
-                R_rc[row_slices[target_cell], col_slice] = R
-            col = col + len(r_shf.stalk(cell))
-        return R_rc
-
-    def in_img(self, M, v):
-            A = np.concatenate((M, v), axis=1)
-            return matrix_rank(M) == matrix_rank(A)
-
-    def check_section(self, section, att_secs, c_att_secs, 
-                            R_tc, R_lc, R_rc, K_l, K_r):
-        # TODO: make this match with Definition 4.3
-        # make sure the global section has a unique immediate predecessor
-        if len(att_secs.children(section)) != 1:
-            return False
-        # that section should be the zero section
-        zero = list(att_secs.children(section))[0]
-        if any(a!=0 for a in zero):
-            return False
-        # restrict the global section to the center
-        # really that's happening in the `np.matmul` call, some formatting
-        # is happening with `tuple`
-        c_section = tuple([int(s==1) 
-                           for s in np.matmul(R_tc, galois.GF2(section))])
-        # this section should have a unique immediate predecessor
-        if len(c_att_secs.children(c_section)) != 1:
-            return False
-        # that predecessor should have two predecessors of its own
-        pred = list(c_att_secs.children(c_section))[0]
-        if len(c_att_secs.children(pred)) != 2:
-            return False
-
-        # pick out each of the two predecessors from before
-        s0 = galois.GF2([[a] for a in list(c_att_secs.children(pred))[0]])
-        s1 = galois.GF2([[a] for a in list(c_att_secs.children(pred))[1]])     
-        # determine the image of the sections from the left side into the center
-        M_lc = np.matmul(R_lc, K_l)
-        # determine the image of the sections from the right side into the center
-        M_rc = np.matmul(R_rc, K_r)
-
-        # don't know yet whether or not `s0` or `s1` is on the left or right!
-        # `hyz01`: `s0` is on the left, `s1` is on the right
-        # `s0` is inaccessible from the right, `s1` is inaccessible from the left
-        hys01 = (self.in_img(M_lc, s0) and self.in_img(M_rc, s1) 
-                 and not self.in_img(M_lc, s1) and not self.in_img(M_rc, s0))
-        # `hyz02`: `s1` is on the left, `s0` is on the right
-        # `s1` is inaccessible from the right, `s0` is inaccessible from the left
-        hys10 = (self.in_img(M_lc, s1) and self.in_img(M_rc, s0) 
-                 and not self.in_img(M_lc, s0) and not self.in_img(M_rc, s1))
-        return hys01 or hys10
-        
     def general_hysteresis(self, pg, match, ordering):
-        c_match = match[:-2]
-        l_edge_index = match[-2]
-        r_edge_index = match[-1]
+        #   the coho_criteria callback: tests whether `match` (a set of
+        #   path nodes, reordered by `ordering`) exhibits an algebraic
+        #   switch bifurcation, per the definition at the top of the file
 
-        # 1. Build the center sheaf and its attractor-section poset ONCE.
-        #    This is the one expensive (2^C) enumeration we can't avoid,
-        #    and it's shared between the left and right searches.
-        c_sheaf_data = self.build_sheaf_data(c_match)
-        c_pc, c_stg_dict, c_shf, c_shf_cohomology, c_rank = c_sheaf_data
-        c_morse_dict = build_morse_dict(c_pc, c_stg_dict)
-        c_att_secs = attractor_sections(c_shf, c_morse_dict)
+        #   get the whole path
+        #   reorder the match so that it's ordered "left-to-right"
+        match_sorted = [
+            parameter_node
+            for _, parameter_node in sorted(zip(ordering, match))
+        ]
+        #   compute the relevant sheaf data on the entire path
+        path_data = self.build_sheaf_data(match_sorted)
 
-        # 2. Cheap linear scan of c_att_secs for candidate fold triples:
-        #    pred with exactly one parent and exactly two children s0, s1,
-        #    where s0 | s1 == pred is checked explicitly (closes the gap
-        #    in the current check_section, which only checked cover-count).
-        fold_candidates = self.find_fold_candidates(c_att_secs)
-        if not fold_candidates:
-            return False
+        #   get the "center" of the path
+        match_center = match_sorted[1:-1]
+        #   compute the relevant sheaf data on the center
+        center_data = self.build_sheaf_data(match_center)
 
-        # 3. For each candidate, try to extend s0/s1 to an atom of the left/right
-        #    poset using ONLY the one new endpoint cell -- not a full
-        #    attractor_sections search over the whole left/right sub-path.
-        for (pred, s0, s1, c_s) in fold_candidates:
-            for (left_val, right_val) in [(s0, s1), (s1, s0)]:
-                a = self.extend_atom_at_endpoint(c_shf, c_match, left_val,
-                                                match, l_edge_index)
-                b = self.extend_atom_at_endpoint(c_shf, c_match, right_val,
-                                                match, r_edge_index)
-                if a is None or b is None:
-                    continue
+        #   get the "left" side of the path
+        match_left = match_sorted[:-1]
+        left_node = match_sorted[0]
+        #   compute the relevant sheaf data on the left
+        left_data = self.build_sheaf_data(match_left)
 
-                # 4. Confirm a genuine global section s exists on the whole path,
-                #    consistent with a, c_s, b, and itself minimal (its own unique
-                #    predecessor on Z_P is the zero section).
-                if self.confirm_global_section(a, c_s, b, match, c_match,
-                                            l_edge_index, r_edge_index):
-                    return True
+        #   get the "right" side of the path
+        match_right = match_sorted[1:]
+        right_node = match_sorted[-1]
+        #   compute the relevant sheaf data on the right
+        right_data = self.build_sheaf_data(match_right)
 
+        #   get the restriction maps
+        R_path_to_left = self.build_side_restriction(
+            path_data, left_data, right_node
+        )
+        R_path_to_right = self.build_side_restriction(
+            path_data, right_data, left_node
+        )
+        R_left_to_center = self.build_side_restriction(
+            left_data, center_data, left_node, True
+        )
+        R_right_to_center = self.build_side_restriction(
+            right_data, center_data, right_node
+        )
+        #   get restriction from total path to center by composition
+        R_path_to_center = np.matmul(R_left_to_center, R_path_to_left)
+        #   shouldn't matter which direction we approach from
+        assert (
+            R_path_to_center == np.matmul(R_right_to_center, R_path_to_right)
+        ).all()
+
+        #   get the attractor sections
+        #   whose immediate precessor is empty
+        #   over the whole path get the zero section
+        path_zero_section = (0,) * path_data.rank
+        #   then get all its parents
+        path_attractor_atoms = path_data.attractor_sections.parents(path_zero_section)
+        #   over the left side get the zero section
+        left_zero_section = (0,) * left_data.rank
+        #   then get all its parents
+        left_attractor_atoms = left_data.attractor_sections.parents(left_zero_section)
+        #   over the right side get the zero section
+        right_zero_section = (0,) * right_data.rank
+        #   then get all its parents
+        right_attractor_atoms = right_data.attractor_sections.parents(right_zero_section)
+
+        #   following the notation at the beginning of the file
+        #   by only considering atoms, we achieve (1.) minimality for free
+        for s, a, b in product(
+            path_attractor_atoms, 
+            left_attractor_atoms,
+            right_attractor_atoms            
+        ):
+            #   first we check (2.) (ordering) on the left side
+            #   restrict 's' to the left side
+            s_left = np.matmul(R_path_to_left, galois.GF2(s))
+            #   convert back to tuple
+            s_left = tuple(s_left.tolist())
+            #   if 'a' is larger than 's_left'
+            if left_data.attractor_sections.less(s_left, a):
+                #   fails (2.), move to next
+                continue
+
+            #   next we check (2.) (ordering) on the right side
+            #   restrict 's' to the right side
+            s_right = np.matmul(R_path_to_right, galois.GF2(s))
+            #   convert back to tuple
+            s_right = tuple(s_right.tolist())
+            #   if 'b' is larger than 's_right'
+            if right_data.attractor_sections.less(s_right, b):
+                #   fails (2.), move to next
+                continue
+
+            #   next we check (3.) (folding) in the middle
+            #   restrict 's' to the center
+            s_center = np.matmul(R_path_to_center, galois.GF2(s))
+            #   convert back to tuple
+            s_center = tuple(s_center.tolist())
+            #   calculate immediate predecessors
+            s_center_pred = center_data.attractor_sections.children(s_center)
+            #   if s_center has multiple immediate predecessors
+            if len(s_center_pred) != 1:
+                #   fails (3.), return False
+                continue
+            #   otherwise get the immediate predecessor
+            s_center_pred = next(iter(s_center_pred))
+
+            #   restrict 'a' to the center
+            a_center = np.matmul(R_left_to_center, galois.GF2(a))
+            #   convert back to tuple
+            a_center = tuple(a_center.tolist())
+            #   restrict 'b' to the center
+            b_center = np.matmul(R_right_to_center, galois.GF2(b))
+            #   convert back to tuple
+            b_center = tuple(b_center.tolist())
+            #   calculate the union of these attractors
+            a_vee_b_center = tuple(x | y for x, y in zip(a_center, b_center))
+            #   if this union is not the immediate predecessor of 's'
+            if s_center_pred != a_vee_b_center:
+                #   fails (3.), move to next
+                continue
+
+            #   otherwise, we meet the criteria! done
+            return True
+
+        #   if we've checked all combos and still don't have a match, fails
         return False
 
-    def find_fold_candidates(self, c_att_secs):
-        """ Scan the center attractor-section poset for candidate folds.
+    def stalk_slices(self, shf):
+        #   map each cell of `shf` (a Sheaf) to the slice of a flattened
+        #   section tuple that holds its stalk
 
-            A "fold" is a triple (pred, s0, s1) satisfying the folding 
-            condition of Definition 4.3: pred is the unique immediate 
-            predecessor of some c_s in the poset, and s0 | s1 == pred for 
-            some pair of sections below pred. s0, s1 are candidates for
-            a|center, b|center; c_s is the candidate for s|center.
+        #   walk the cells in the same order they appear in a section
+        slices = {}
+        n = 0
+        for cell in shf.grading[0]:
+            #   get the width of this cell's stalk
+            m = len(shf.stalk(cell))
+            #   record the slice of the section tuple it occupies
+            slices[cell] = slice(n, n + m)
+            n += m
+        return slices
 
-            We search over ALL pairs of sections below pred (not just its 
-            immediate children/covers), since a|center or b|center need 
-            only be SOME section below pred whose join reaches it -- not 
-            necessarily a cover of pred. A cover of pred might fail to 
-            extend to a genuine atom on its own side (Step 3) while one of 
-            its own descendants succeeds, so restricting to covers here 
-            could silently drop valid folds.
+    def build_side_restriction(self, side_data, center_data, side_node, flip_dummy=False):
+        #   build the restriction matrix from `side_data` (the larger
+        #   sheaf) down to `center_data` (the smaller one it contains),
+        #   where `side_node` is the parameter node present in
+        #   `side_data` but not `center_data`. `flip_dummy` picks which
+        #   of the two calls sharing a length-3 center routes through
+        #   the dummy cell
 
-            Returns a  list of (pred, s0, s1, c_s) tuples.
-        """
+        #   initialize galois field
+        gf = side_data.sheaf.GF
+        #   initialize to zero map
+        restriction = gf([
+            [0 for _ in range(side_data.rank)]
+            for _ in range(center_data.rank)
+        ])
 
-        candidates = []
-        for pred in c_att_secs.vertices():
-            # pred must be the unique immediate predecessor of a well
-            # defined c_s -- i.e. c_s's ONLY child is pred, not just one
-            # of several. Checking both directions (pred has one parent,
-            # and that parent has only pred as a child) rules out cases
-            # where pred has a single parent that also covers some other,
-            # unrelated element.
-            parents = list(c_att_secs.parents(pred))
-            if len(parents) != 1:
-                continue
-            c_s = parents[0]
-            if len(c_att_secs.children(c_s)) != 1:
-                continue
+        #   get the side edge cell
+        side_edge_cell = top_cech_cell(
+            self.parameter_graph, side_node, 1
+        )
 
-            # Cheap pre-filter before paying for the full down-set: if
-            # pred covers only a single element c, every section strictly
-            # below pred is forced to be <= c (any maximal chain down from
-            # pred passes through its one and only cover), so no pair of
-            # strictly-below sections can join back up past c to reach
-            # pred. Skip without ever calling descendants().
-            if len(c_att_secs.children(pred)) < 2:
-                continue
+        #   figure out if the center data has a dummy
+        has_dummy = self.dummy in center_data.sheaf.grading[0]
 
-            # Every section strictly below pred is a candidate for s0/s1 --
-            # not just pred's immediate children. `descendants` gives the
-            # full down-set (pychomp uses strict inequality, so pred itself
-            # is excluded).
-            below = list(c_att_secs.descendants(pred))
+        #   create dictionaries which maps cells to section indices
+        side_stalk_slices   = self.stalk_slices(side_data.sheaf)
+        center_stalk_slices = self.stalk_slices(center_data.sheaf)
 
-            # Check every pair for the folding equality directly -- don't
-            # assume any structural shortcut (e.g. cover count) implies it.
-            for s0, s1 in itertools.combinations(below, 2):
-                joined = tuple(int(x or y) for x, y in zip(s0, s1))
-                if joined == pred:
-                    candidates.append((pred, s0, s1, c_s))
+        #   for each 0-cell in the side complex
+        for source_cell in side_data.sheaf.grading[0]:
+            #   source slice of restriction corresponds to this cell
+            source_slice = side_stalk_slices[source_cell]
 
-        return candidates
+            #   get incident top cells
+            incident_top_cells = side_data.sheaf.P.children(source_cell)
+            #   if source cell is incident to side edge and is nondegenerate
+            if (
+                side_edge_cell in incident_top_cells
+                and len(incident_top_cells) > 1
+            ):
+                #   get the other edge cell
+                center_edge_cell = next(
+                    cell for cell in incident_top_cells 
+                    if cell != side_edge_cell
+                )
+                #   the target cell is the degenerate 0-cell defined by
+                #   the inequalities of this parameter node (edge cell)
+                target_cell = CechCell(
+                    center_edge_cell.inequality_sets,
+                    0,
+                    center_edge_cell.labels
+                )
+                #   if there is a dummy and 'flip_dummy' is true
+                if has_dummy and flip_dummy:
+                    #   use dummy
+                    target_cell = self.dummy
+                #   get slice corresponding to this cell
+                target_slice = center_stalk_slices[target_cell]
+
+                #   build the restriction map between the two stalks
+                R = morse_restriction(
+                    side_data.sheaf.stalk(source_cell),
+                    center_data.sheaf.stalk(target_cell)
+                )
+                #   load into total restriction
+                restriction[target_slice, source_slice] = R
+ 
+            elif side_edge_cell not in incident_top_cells:
+                #   otherwise, if the source cell is not incident to the side
+                #   edge, we know the cell is contained in the center complex!
+                target_cell = source_cell
+                #   get slice corresponding to this cell
+                target_slice = center_stalk_slices[target_cell]
+
+                #   construct the appropriate identity
+                rank = len(side_data.sheaf.stalk(source_cell))
+                R = gf(np.eye(rank).astype(int))
+
+                #   if there is a dummy and 'flip_dummy' is false
+                if has_dummy and not flip_dummy:
+                    #   use dummy
+                    target_cell = self.dummy
+                    #   get slice corresponding to this cell
+                    target_slice = center_stalk_slices[target_cell]
+                    #   build the restriction map between the two stalks
+                    R = morse_restriction(
+                        side_data.sheaf.stalk(source_cell),
+                        center_data.sheaf.stalk(target_cell)
+                    )
+
+                #   load into total restriction
+                restriction[target_slice, source_slice] = R
+
+        #   done
+        return restriction
 
     def __init__(self, parameter_graph, length, param_stability=None):
+        #   set up a query that searches paths of `length` nodes in
+        #   `parameter_graph` for algebraic switch bifurcations;
+        #   optional `param_stability` skips recomputing stability data
+
+        #   a path needs at least 3 nodes for a left/center/right split
         if length < 3:
             raise ValueError("Length must be greater than 3.")
         self.parameter_graph = parameter_graph
         self.length = length
         self.build_grading(param_stability)
+        #   placeholder cell standing in for a missing boundary edge
+        #   when a side of the path collapses to a single vertex
         self.dummy = CechCell(tuple(frozenset({('dummy',)})), 0)
-        
+
+        #   build a simple path graph 0 -- 1 -- ... -- (length-1)
         vertices = list(range(length))
         edges = [(i, i+1) for i in vertices[:-1]]
+        #   endpoints must be monostable (-1), interior nodes multistable (1)
         match_grading = {-1 : [0, length-1], 1 : vertices[1:-1]}
         coho_criteria = [{"custom" : self.general_hysteresis}]
 
-        super().__init__(parameter_graph, vertices, edges, 
-                         self.param_grading, match_grading, coho_criteria)
+        super().__init__(
+            parameter_graph, vertices, edges,
+            self.param_grading, match_grading, coho_criteria
+        )
