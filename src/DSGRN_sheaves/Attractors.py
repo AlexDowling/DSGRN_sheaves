@@ -48,7 +48,8 @@ def attractor_sections(shf, morse_dict, shf_cohomology=None):
         shf_cohomology = sheaf_cohomology(shf)
     sections = shf_cohomology[0]
     att_secs = pychomp.DirectedAcyclicGraph()
-    zero_sec = 0*sections[0]
+    rank = sum(len(shf.stalk(cell)) for cell in shf.grading[0])
+    zero_sec = shf.GF([0]*rank)
 
     for c in itertools.product(*[[0, 1] for s in sections]):
         section = sum([cv*sec for cv, sec in zip(c, sections)], zero_sec)
